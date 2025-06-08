@@ -10,6 +10,10 @@ interface Preferences {
   searchPaths: string;
   maxHistoryItems: string;
   searchDepth: string;
+  maxResults: string;
+  debounceDelay: string;
+  enableFuzzyMatch: string;
+  prioritizeRecent: string;
 }
 
 interface FolderItem {
@@ -18,16 +22,97 @@ interface FolderItem {
   lastUsed?: Date;
   isFromHistory: boolean;
   sourceDirectory?: string;
+  isParentDirectory?: boolean;
+  score?: number;
+  matchReason?: string;
 }
+
+// Calculate match score for a folder name against search query
+function calculateMatchScore(folderName: string, query: string, pathDepth: number = 0, isFromHistory: boolean = false): { score: number; reason: string } {
+  if (!query) return { score: 50, reason: "no query" };
+  
+  const normalizedName = folderName.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  
+  // History bonus
+  let score = 0;
+  let reason = "";
+  
+  // Exact match
+  if (normalizedName === normalizedQuery) {
+    score = 100;
+    reason = "exact match";
+  }
+  // Starts with query
+  else if (normalizedName.startsWith(normalizedQuery)) {
+    score = 90;
+    reason = "starts with";
+  }
+  // Word boundary match (after space, dash, underscore)
+  else if (normalizedName.match(new RegExp(`[\\s\\-_]${normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))) {
+    score = 80;
+    reason = "word boundary";
+  }
+  // Contains query
+  else if (normalizedName.includes(normalizedQuery)) {
+    score = 70;
+    reason = "contains";
+  }
+  // Fuzzy match (characters in sequence)
+  else {
+    const fuzzyScore = calculateFuzzyScore(normalizedName, normalizedQuery);
+    if (fuzzyScore > 0.5) {
+      score = Math.floor(50 + fuzzyScore * 20);
+      reason = "fuzzy match";
+    } else {
+      return { score: 0, reason: "no match" };
+    }
+  }
+  
+  // Apply bonuses and penalties
+  if (isFromHistory) {
+    score += 20;
+    reason += " + history";
+  }
+  
+  // Path depth penalty (deeper = lower score)
+  score -= Math.min(pathDepth * 5, 25);
+  if (pathDepth > 0) {
+    reason += ` -${pathDepth}depth`;
+  }
+  
+  return { score: Math.max(score, 1), reason };
+}
+
+// Simple fuzzy matching algorithm
+function calculateFuzzyScore(text: string, pattern: string): number {
+  let textIndex = 0;
+  let patternIndex = 0;
+  let matches = 0;
+  
+  while (textIndex < text.length && patternIndex < pattern.length) {
+    if (text[textIndex] === pattern[patternIndex]) {
+      matches++;
+      patternIndex++;
+    }
+    textIndex++;
+  }
+  
+  return patternIndex === pattern.length ? matches / pattern.length : 0;
+}
+
 
 export default function SearchFolders() {
   const [searchText, setSearchText] = useState("");
+  const [debouncedSearchText, setDebouncedSearchText] = useState("");
   const [folderHistory, setFolderHistory] = useState<string[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<string[]>([]);
   const [displayedPaths, setDisplayedPaths] = useState<Set<string>>(new Set());
+  const [searchCancelRef, setSearchCancelRef] = useState<{ cancel: boolean }>({ cancel: false });
+  const [searchProgress, setSearchProgress] = useState<string>("");
   
   const preferences = getPreferenceValues<Preferences>();
   const searchPaths = preferences.searchPaths 
@@ -35,6 +120,10 @@ export default function SearchFolders() {
     : [homedir()];
   const maxHistoryItems = parseInt(preferences.maxHistoryItems) || 10;
   const searchDepth = parseInt(preferences.searchDepth) || 3;
+  const maxResults = parseInt(preferences.maxResults) || 100;
+  const debounceDelay = parseInt(preferences.debounceDelay) || 300;
+  const enableFuzzyMatch = preferences.enableFuzzyMatch !== "false";
+  const prioritizeRecent = preferences.prioritizeRecent !== "false";
 
   // Load history from LocalStorage on component mount
   useEffect(() => {
@@ -57,37 +146,125 @@ export default function SearchFolders() {
     loadHistory();
   }, []);
 
+  // Debounce search text
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchText(searchText);
+    }, debounceDelay);
+
+    return () => clearTimeout(timer);
+  }, [searchText, debounceDelay]);
+
   useEffect(() => {
     searchFolders();
-  }, [searchText, currentDirectory, folderHistory]);
+  }, [debouncedSearchText, currentDirectory]);
+
+  // Refresh search when history changes
+  useEffect(() => {
+    if (folderHistory.length > 0) {
+      searchFolders();
+    }
+  }, [folderHistory]);
+
+  // Progressive search function that shows results as they come in
+  async function performProgressiveSearch(
+    searchPaths: string[], 
+    query: string, 
+    maxDepth: number, 
+    cancelRef: { cancel: boolean },
+    addToCollection: (items: FolderItem[]) => void,
+    allFolders: FolderItem[],
+    displayedPaths: Set<string>
+  ) {
+    const updateDisplay = () => {
+      const sortedFolders = [...allFolders].sort((a, b) => {
+        const scoreA = a.score || 0;
+        const scoreB = b.score || 0;
+        return scoreB - scoreA;
+      });
+      const limitedFolders = sortedFolders.slice(0, maxResults);
+      setFolders(limitedFolders);
+      setDisplayedPaths(new Set(displayedPaths));
+    };
+
+    // Stage 1: Search at depth 1 (immediate children)
+    for (const searchPath of searchPaths) {
+      if (cancelRef.cancel) return;
+      
+      try {
+        await findFolders(searchPath, query, 1, (batchItems) => {
+          if (cancelRef.cancel) return;
+          
+          const itemsWithSource = batchItems.map(folder => ({
+            ...folder,
+            sourceDirectory: searchPath
+          }));
+          addToCollection(itemsWithSource);
+          updateDisplay();
+        });
+      } catch (error) {
+        console.error(`Failed shallow search in ${searchPath}:`, error);
+      }
+    }
+
+    // Stage 2: Search deeper if needed and not cancelled
+    if (maxDepth > 1) {
+      for (const searchPath of searchPaths) {
+        if (cancelRef.cancel) return;
+        
+        try {
+          await findFolders(searchPath, query, maxDepth, (batchItems) => {
+            if (cancelRef.cancel) return;
+            
+            // Filter out results we already have from shallow search
+            const newDeepResults = batchItems.filter(item => !displayedPaths.has(item.path));
+            if (newDeepResults.length > 0) {
+              const itemsWithSource = newDeepResults.map(folder => ({
+                ...folder,
+                sourceDirectory: searchPath
+              }));
+              addToCollection(itemsWithSource);
+              updateDisplay();
+            }
+          });
+        } catch (error) {
+          console.error(`Failed deep search in ${searchPath}:`, error);
+        }
+      }
+    }
+  }
 
   async function searchFolders() {
     setIsLoading(true);
+    setSearchProgress("");
     
-    // Reset displayed paths for new search
-    const currentDisplayedPaths = new Set<string>();
-    setDisplayedPaths(currentDisplayedPaths);
-    setFolders([]);
+    // Cancel previous search
+    searchCancelRef.cancel = true;
+    const currentSearchRef = { cancel: false };
+    setSearchCancelRef(currentSearchRef);
     
     try {
       const allFolders: FolderItem[] = [];
+      const currentDisplayedPaths = new Set<string>();
+      const query = debouncedSearchText;
       
-      // Add folders from history first (always show when relevant)
-      // Debug: Show current history state
-      console.log(`searchFolders called: searchText="${searchText}", currentDirectory=${currentDirectory}, historyLength=${folderHistory.length}`);
+      // Debug: Show current search state
+      console.log(`searchFolders called: query="${query}", currentDirectory=${currentDirectory}, historyLength=${folderHistory.length}`);
       if (folderHistory.length > 0) {
         console.log(`History has ${folderHistory.length} items:`, folderHistory.map(p => basename(p)));
       }
       
+      if (query) {
+        setSearchProgress("Searching...");
+      }
+      
       // Helper function to safely add folders without duplicates
-      const addFoldersToDisplay = (newFolders: FolderItem[]) => {
+      const addFoldersToCollection = (newFolders: FolderItem[]) => {
         const uniqueNewFolders = newFolders.filter(folder => !currentDisplayedPaths.has(folder.path));
-        if (uniqueNewFolders.length > 0) {
-          uniqueNewFolders.forEach(folder => currentDisplayedPaths.add(folder.path));
-          allFolders.push(...uniqueNewFolders);
-          setFolders([...allFolders]);
-          setDisplayedPaths(new Set(currentDisplayedPaths));
-        }
+        uniqueNewFolders.forEach(folder => {
+          currentDisplayedPaths.add(folder.path);
+          allFolders.push(folder);
+        });
       };
       
       // Process history items first and show them immediately
@@ -98,19 +275,24 @@ export default function SearchFolders() {
           const stats = await stat(historyPath);
           if (stats.isDirectory()) {
             const name = basename(historyPath);
-            // Show history items when not in navigation mode and when search matches
-            const matchesSearch = !searchText || name.toLowerCase().includes(searchText.toLowerCase());
             const showInCurrentMode = currentDirectory === null; // Only show history in main mode
             
-            console.log(`History item ${name}: matchesSearch=${matchesSearch}, showInCurrentMode=${showInCurrentMode}, currentDirectory=${currentDirectory}`);
-            
-            if (matchesSearch && showInCurrentMode) {
-              const historyItem = {
-                path: historyPath,
-                name,
-                isFromHistory: true
-              };
-              historyItems.push(historyItem);
+            if (showInCurrentMode) {
+              const matchResult = calculateMatchScore(name, query, 0, true);
+              
+              // Only show if there's a decent match or no query
+              if (!query || matchResult.score > 0) {
+                console.log(`History item ${name}: score=${matchResult.score}, reason=${matchResult.reason}`);
+                
+                const historyItem: FolderItem = {
+                  path: historyPath,
+                  name,
+                  isFromHistory: true,
+                  score: matchResult.score,
+                  matchReason: matchResult.reason
+                };
+                historyItems.push(historyItem);
+              }
             }
           }
         } catch (error) {
@@ -123,67 +305,96 @@ export default function SearchFolders() {
         }
       }
       
-      // Show history items immediately
+      // Add history items to collection
       if (historyItems.length > 0) {
-        addFoldersToDisplay(historyItems);
+        addFoldersToCollection(historyItems);
       }
       
       // If we're navigating in a specific directory, show its contents
       if (currentDirectory) {
-        const directoryFolders = await findFolders(currentDirectory, searchText, 1);
+        const directoryFolders = await findFolders(currentDirectory, query, 1);
         const newItems: FolderItem[] = directoryFolders.map(folder => ({
           ...folder,
           sourceDirectory: currentDirectory
         }));
-        addFoldersToDisplay(newItems);
+        addFoldersToCollection(newItems);
       } else {
-        
-        // Search in all specified directories with dynamic updates
-        for (const searchPath of searchPaths) {
-          try {
-            if (searchText.length === 0) {
-              // Show all folders when no search text, limited to first level for performance
-              await findFoldersWithCallback(
-                searchPath, 
-                "", 
-                1, 
-                (newItems) => {
-                  const itemsWithSource = newItems.map(folder => ({
-                    ...folder,
-                    sourceDirectory: searchPath
-                  }));
-                  addFoldersToDisplay(itemsWithSource);
-                }
-              );
-            } else if (searchText.length >= 1) {
-              // Dynamic search with callback for progressive results
-              await findFoldersWithCallback(
-                searchPath, 
-                searchText, 
-                searchDepth,
-                (newItems) => {
-                  const itemsWithSource = newItems.map(folder => ({
-                    ...folder,
-                    sourceDirectory: searchPath
-                  }));
-                  addFoldersToDisplay(itemsWithSource);
-                }
-              );
+        // When in main view (not navigating), show registered parent directories first
+        if (query.length === 0) {
+          // Show registered parent directories themselves first
+          const parentDirectoryItems: FolderItem[] = [];
+          for (const searchPath of searchPaths) {
+            try {
+              const stats = await stat(searchPath);
+              if (stats.isDirectory()) {
+                parentDirectoryItems.push({
+                  path: searchPath,
+                  name: basename(searchPath),
+                  isFromHistory: false,
+                  sourceDirectory: dirname(searchPath),
+                  isParentDirectory: true
+                });
+              }
+            } catch (error) {
+              console.error(`Failed to access parent directory ${searchPath}:`, error);
             }
-          } catch (error) {
-            console.error(`Failed to search in ${searchPath}:`, error);
           }
+          
+          if (parentDirectoryItems.length > 0) {
+            addFoldersToCollection(parentDirectoryItems);
+          }
+          
+          // Then show contents of parent directories (first level only)
+          for (const searchPath of searchPaths) {
+            try {
+              const parentItems = await findFolders(searchPath, "", 1);
+              const itemsWithSource = parentItems.map(folder => ({
+                ...folder,
+                sourceDirectory: searchPath
+              }));
+              addFoldersToCollection(itemsWithSource);
+            } catch (error) {
+              console.error(`Failed to search in ${searchPath}:`, error);
+            }
+          }
+        } else if (query.length >= 1) {
+          // Progressive search - show results as they come in
+          await performProgressiveSearch(searchPaths, query, searchDepth, currentSearchRef, addFoldersToCollection, allFolders, currentDisplayedPaths);
         }
       }
+      
+      // Sort by score (highest first) and update display
+      const sortedFolders = allFolders.sort((a, b) => {
+        const scoreA = a.score || 0;
+        const scoreB = b.score || 0;
+        return scoreB - scoreA;
+      });
+      
+      // Limit results to prevent UI overload
+      const limitedFolders = sortedFolders.slice(0, maxResults);
+      
+      setFolders(limitedFolders);
+      setDisplayedPaths(currentDisplayedPaths);
+      setSearchProgress("");
     } catch (error) {
       showToast(Toast.Style.Failure, "Search failed", String(error));
+      setSearchProgress("");
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function findFolders(rootPath: string, query: string, maxDepth = 3): Promise<FolderItem[]> {
+  async function findFolders(rootPath: string, query: string, maxDepth = 3, onBatch?: (items: FolderItem[]) => void): Promise<FolderItem[]> {
     const results: FolderItem[] = [];
+    const batchSize = 5;
+    let currentBatch: FolderItem[] = [];
+    
+    const processBatch = () => {
+      if (currentBatch.length > 0 && onBatch) {
+        onBatch([...currentBatch]);
+        currentBatch.length = 0;
+      }
+    };
     
     async function searchRecursive(currentPath: string, depth: number) {
       if (depth > maxDepth) return;
@@ -198,13 +409,26 @@ export default function SearchFolders() {
           try {
             const stats = await stat(fullPath);
             if (stats.isDirectory()) {
-              // Add folder if it matches the query (or if no query specified)
-              if (query === "" || entry.toLowerCase().includes(query.toLowerCase())) {
-                results.push({
+              // Calculate match score
+              const matchResult = calculateMatchScore(entry, query, depth, false);
+              
+              // Add folder if it has a good enough score or no query specified
+              if (query === "" || matchResult.score > 0) {
+                const folderItem = {
                   path: fullPath,
                   name: entry,
-                  isFromHistory: false
-                });
+                  isFromHistory: false,
+                  score: matchResult.score,
+                  matchReason: matchResult.reason
+                };
+                
+                results.push(folderItem);
+                currentBatch.push(folderItem);
+                
+                // Process batch when it reaches batch size
+                if (currentBatch.length >= batchSize) {
+                  processBatch();
+                }
               }
               
               // Continue searching deeper if we haven't reached max depth
@@ -223,6 +447,10 @@ export default function SearchFolders() {
     }
     
     await searchRecursive(rootPath, 0);
+    
+    // Process any remaining items in the batch
+    processBatch();
+    
     return results.slice(0, 20); // Limit results
   }
 
@@ -314,9 +542,6 @@ export default function SearchFolders() {
     try {
       await LocalStorage.setItem("folder-history-v2", JSON.stringify(newHistory));
       showToast(Toast.Style.Success, "Removed from Recent", folder.name);
-      
-      // Refresh the display
-      searchFolders();
     } catch (error) {
       console.warn("Failed to save folder history:", error);
       showToast(Toast.Style.Failure, "Failed to remove from history", String(error));
@@ -363,18 +588,30 @@ export default function SearchFolders() {
           accessories.push({ text: basename(folder.sourceDirectory) });
         }
         
+        // Add match score and reason for debugging/info
+        if (folder.score && debouncedSearchText) {
+          accessories.push({ text: `${folder.score}` });
+        }
+        
         return (
           <List.Item
             key={`${folder.path}-${folder.isFromHistory ? 'history' : 'search'}`}
             title={folder.name}
             subtitle={folder.path}
-            icon={folder.isFromHistory ? Icon.Clock : Icon.Folder}
+            icon={folder.isFromHistory ? Icon.Clock : folder.isParentDirectory ? Icon.House : Icon.Folder}
             accessories={accessories}
             actions={
               <ActionPanel>
                 <Action
+                  title="Navigate Into"
+                  icon={Icon.ArrowRight}
+                  shortcut={{ modifiers: ["cmd"], key: "arrowRight" }}
+                  onAction={() => navigateIntoFolder(folder)}
+                />
+                <Action
                   title="Open Folder"
                   icon={Icon.Folder}
+                  shortcut={{ modifiers: ["cmd"], key: "o" }}
                   onAction={() => {
                     handleFolderSelect(folder);
                     // Open folder using system default
@@ -386,17 +623,11 @@ export default function SearchFolders() {
                   target={folder.path}
                   onOpen={() => handleFolderSelect(folder)}
                 />
-                <Action
-                  title="Navigate Into"
-                  icon={Icon.ArrowRight}
-                  shortcut={{ modifiers: [], key: "arrowRight" }}
-                  onAction={() => navigateIntoFolder(folder)}
-                />
                 {currentDirectory && (
                   <Action
                     title="Go Back"
                     icon={Icon.ArrowLeft}
-                    shortcut={{ modifiers: [], key: "arrowLeft" }}
+                    shortcut={{ modifiers: ["cmd"], key: "arrowLeft" }}
                     onAction={navigateBack}
                   />
                 )}
@@ -430,8 +661,8 @@ export default function SearchFolders() {
       })}
       {folders.length === 0 && !isLoading && (
         <List.EmptyView
-          title="No folders found"
-          description={searchText ? "Try a different search term" : "Start typing to search for folders"}
+          title={searchProgress || "No folders found"}
+          description={searchProgress ? "Please wait..." : (debouncedSearchText ? "Try a different search term" : "Start typing to search for folders")}
         />
       )}
     </List>
