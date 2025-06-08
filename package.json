@@ -64,11 +64,73 @@
           "value": "5"
         }
       ]
+    },
+    {
+      "name": "maxResults",
+      "type": "textfield",
+      "required": false,
+      "title": "Max Search Results",
+      "description": "Maximum number of folders to display in search results",
+      "default": "100",
+      "placeholder": "100"
+    },
+    {
+      "name": "debounceDelay",
+      "type": "dropdown",
+      "required": false,
+      "title": "Search Delay",
+      "description": "Delay before starting search after typing (milliseconds)",
+      "default": "300",
+      "data": [
+        {
+          "title": "100ms (Fast)",
+          "value": "100"
+        },
+        {
+          "title": "200ms (Normal)",
+          "value": "200"
+        },
+        {
+          "title": "300ms (Balanced)",
+          "value": "300"
+        },
+        {
+          "title": "500ms (Slow)",
+          "value": "500"
+        }
+      ]
+    },
+    {
+      "name": "enableFuzzyMatch",
+      "type": "checkbox",
+      "required": false,
+      "title": "Enable Fuzzy Matching",
+      "description": "Enable fuzzy search that matches characters in sequence (e.g., 'proj' matches 'project')",
+      "default": true,
+      "label": "Enable fuzzy matching for more flexible search"
+    },
+    {
+      "name": "prioritizeRecent",
+      "type": "checkbox",
+      "required": false,
+      "title": "Prioritize Recent Folders",
+      "description": "Give higher scores to recently used folders in search results",
+      "default": true,
+      "label": "Boost recent folders in search rankings"
+    },
+    {
+      "name": "shortcuts",
+      "type": "textfield",
+      "required": false,
+      "title": "Keyboard Shortcuts Guide",
+      "description": "📋 How to use Fast Folder Access:\n\n🔍 SEARCH:\n• Type to search folders dynamically\n• Results sorted by relevance score\n• Fuzzy matching: 'proj' finds 'project'\n\n⚡ ACTIONS:\n• ⏎ Enter: Open folder in default app\n• ⌘O: Open folder in Finder\n• ⌘→: Navigate into folder (browse mode)\n• ⌘←: Go back (when in browse mode)\n• ⌃R: Add to recent folders\n• ⌃X: Remove from recent (recent items only)\n• ⌘C: Copy folder path to clipboard\n\n📁 FOLDER TYPES:\n• 🕐 Recent: Previously accessed folders\n• 🏠 Parent: Configured search directories\n• 📂 Search: Found folders matching your query\n\n⚙️ SEARCH SCORING:\n• Exact match: 100 points\n• Starts with query: 90 points\n• Word boundary match: 80 points\n• Contains query: 70 points\n• Fuzzy match: 50-60 points\n• Recent bonus: +20 points\n• Depth penalty: -5 points per level",
+      "placeholder": "This field shows keyboard shortcuts and usage instructions"
     }
   ],
   "dependencies": {
     "@raycast/api": "^1.62.0",
-    "@raycast/utils": "^1.10.0"
+    "@raycast/utils": "^1.10.0",
+    "typescript": "^5.8.3"
   },
   "scripts": {
     "build": "ray build -e dist",
