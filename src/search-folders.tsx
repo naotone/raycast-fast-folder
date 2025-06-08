@@ -4,6 +4,7 @@ import { useCachedState } from "@raycast/utils";
 import { readdir, stat } from "fs/promises";
 import { join, basename, dirname } from "path";
 import { homedir } from "os";
+import { exec } from "child_process";
 
 interface Preferences {
   searchPaths: string;
@@ -26,6 +27,7 @@ export default function SearchFolders() {
   const [isLoading, setIsLoading] = useState(true);
   const [currentDirectory, setCurrentDirectory] = useState<string | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<string[]>([]);
+  const [displayedPaths, setDisplayedPaths] = useState<Set<string>>(new Set());
   
   const preferences = getPreferenceValues<Preferences>();
   const searchPaths = preferences.searchPaths 
@@ -61,9 +63,14 @@ export default function SearchFolders() {
 
   async function searchFolders() {
     setIsLoading(true);
+    
+    // Reset displayed paths for new search
+    const currentDisplayedPaths = new Set<string>();
+    setDisplayedPaths(currentDisplayedPaths);
+    setFolders([]);
+    
     try {
       const allFolders: FolderItem[] = [];
-      const uniquePaths = new Set<string>();
       
       // Add folders from history first (always show when relevant)
       // Debug: Show current history state
@@ -72,6 +79,19 @@ export default function SearchFolders() {
         console.log(`History has ${folderHistory.length} items:`, folderHistory.map(p => basename(p)));
       }
       
+      // Helper function to safely add folders without duplicates
+      const addFoldersToDisplay = (newFolders: FolderItem[]) => {
+        const uniqueNewFolders = newFolders.filter(folder => !currentDisplayedPaths.has(folder.path));
+        if (uniqueNewFolders.length > 0) {
+          uniqueNewFolders.forEach(folder => currentDisplayedPaths.add(folder.path));
+          allFolders.push(...uniqueNewFolders);
+          setFolders([...allFolders]);
+          setDisplayedPaths(new Set(currentDisplayedPaths));
+        }
+      };
+      
+      // Process history items first and show them immediately
+      const historyItems: FolderItem[] = [];
       for (const historyPath of folderHistory.slice(0, maxHistoryItems)) {
         try {
           // Ensure path exists and is accessible
@@ -85,12 +105,12 @@ export default function SearchFolders() {
             console.log(`History item ${name}: matchesSearch=${matchesSearch}, showInCurrentMode=${showInCurrentMode}, currentDirectory=${currentDirectory}`);
             
             if (matchesSearch && showInCurrentMode) {
-              allFolders.push({
+              const historyItem = {
                 path: historyPath,
                 name,
                 isFromHistory: true
-              });
-              uniquePaths.add(historyPath);
+              };
+              historyItems.push(historyItem);
             }
           }
         } catch (error) {
@@ -103,54 +123,58 @@ export default function SearchFolders() {
         }
       }
       
+      // Show history items immediately
+      if (historyItems.length > 0) {
+        addFoldersToDisplay(historyItems);
+      }
+      
       // If we're navigating in a specific directory, show its contents
       if (currentDirectory) {
         const directoryFolders = await findFolders(currentDirectory, searchText, 1);
-        for (const folder of directoryFolders) {
-          if (!uniquePaths.has(folder.path)) {
-            allFolders.push({
-              ...folder,
-              sourceDirectory: currentDirectory
-            });
-            uniquePaths.add(folder.path);
-          }
-        }
+        const newItems: FolderItem[] = directoryFolders.map(folder => ({
+          ...folder,
+          sourceDirectory: currentDirectory
+        }));
+        addFoldersToDisplay(newItems);
       } else {
         
-        // Search in all specified directories
+        // Search in all specified directories with dynamic updates
         for (const searchPath of searchPaths) {
           try {
             if (searchText.length === 0) {
               // Show all folders when no search text, limited to first level for performance
-              const rootFolders = await findFolders(searchPath, "", 1);
-              for (const folder of rootFolders.slice(0, 15)) {
-                if (!uniquePaths.has(folder.path)) {
-                  allFolders.push({
+              await findFoldersWithCallback(
+                searchPath, 
+                "", 
+                1, 
+                (newItems) => {
+                  const itemsWithSource = newItems.map(folder => ({
                     ...folder,
                     sourceDirectory: searchPath
-                  });
-                  uniquePaths.add(folder.path);
+                  }));
+                  addFoldersToDisplay(itemsWithSource);
                 }
-              }
+              );
             } else if (searchText.length >= 1) {
-              const foundFolders = await findFolders(searchPath, searchText, searchDepth);
-              for (const folder of foundFolders) {
-                if (!uniquePaths.has(folder.path)) {
-                  allFolders.push({
+              // Dynamic search with callback for progressive results
+              await findFoldersWithCallback(
+                searchPath, 
+                searchText, 
+                searchDepth,
+                (newItems) => {
+                  const itemsWithSource = newItems.map(folder => ({
                     ...folder,
                     sourceDirectory: searchPath
-                  });
-                  uniquePaths.add(folder.path);
+                  }));
+                  addFoldersToDisplay(itemsWithSource);
                 }
-              }
+              );
             }
           } catch (error) {
             console.error(`Failed to search in ${searchPath}:`, error);
           }
         }
       }
-      
-      setFolders(allFolders);
     } catch (error) {
       showToast(Toast.Style.Failure, "Search failed", String(error));
     } finally {
@@ -202,17 +226,71 @@ export default function SearchFolders() {
     return results.slice(0, 20); // Limit results
   }
 
+  async function findFoldersWithCallback(
+    rootPath: string, 
+    query: string, 
+    maxDepth = 3, 
+    onBatch?: (items: FolderItem[]) => void
+  ): Promise<FolderItem[]> {
+    const results: FolderItem[] = [];
+    const batchSize = 5; // Show results in batches of 5
+    
+    async function searchRecursive(currentPath: string, depth: number) {
+      if (depth > maxDepth) return;
+      
+      try {
+        const entries = await readdir(currentPath);
+        const batch: FolderItem[] = [];
+        
+        for (const entry of entries) {
+          if (entry.startsWith('.')) continue;
+          
+          const fullPath = join(currentPath, entry);
+          try {
+            const stats = await stat(fullPath);
+            if (stats.isDirectory()) {
+              // Add folder if it matches the query (or if no query specified)
+              if (query === "" || entry.toLowerCase().includes(query.toLowerCase())) {
+                const item = {
+                  path: fullPath,
+                  name: entry,
+                  isFromHistory: false
+                };
+                results.push(item);
+                batch.push(item);
+                
+                // Send batch when it reaches the batch size
+                if (batch.length >= batchSize && onBatch) {
+                  onBatch([...batch]);
+                  batch.length = 0; // Clear batch
+                }
+              }
+              
+              // Continue searching deeper if we haven't reached max depth
+              // Only search deeper when there's a search query for performance
+              if (depth < maxDepth && query.length > 0) {
+                await searchRecursive(fullPath, depth + 1);
+              }
+            }
+          } catch (error) {
+            // Skip inaccessible directories
+          }
+        }
+        
+        // Send remaining items in batch
+        if (batch.length > 0 && onBatch) {
+          onBatch([...batch]);
+        }
+      } catch (error) {
+        // Skip inaccessible directories
+      }
+    }
+    
+    await searchRecursive(rootPath, 0);
+    return results.slice(0, 20); // Limit results
+  }
+
   async function handleFolderSelect(folder: FolderItem) {
-    // Debug: Show what we're trying to add
-    const hasSpaces = folder.path.includes(' ');
-    const hasDots = folder.path.includes('.');
-    
-    showToast(
-      Toast.Style.Success, 
-      `Adding: ${folder.name}`, 
-      `Spaces: ${hasSpaces}, Dots: ${hasDots}, Path: ${folder.path.slice(0, 50)}...`
-    );
-    
     // Update history
     const newHistory = [folder.path, ...folderHistory.filter(p => p !== folder.path)];
     const trimmedHistory = newHistory.slice(0, maxHistoryItems);
@@ -222,22 +300,26 @@ export default function SearchFolders() {
     // Save to LocalStorage
     try {
       await LocalStorage.setItem("folder-history-v2", JSON.stringify(trimmedHistory));
-      
-      // Immediately verify it was saved
-      const saved = await LocalStorage.getItem<string>("folder-history-v2");
-      const parsed = saved ? JSON.parse(saved) : [];
-      
-      setTimeout(() => {
-        showToast(
-          Toast.Style.Success,
-          "Verification",
-          `Saved ${parsed.length} items. First: ${parsed[0] ? basename(parsed[0]) : 'none'}`
-        );
-      }, 1000);
-      
+      showToast(Toast.Style.Success, "Added to Recent", folder.name);
     } catch (error) {
       console.warn("Failed to save folder history:", error);
       showToast(Toast.Style.Failure, "Failed to save history", String(error));
+    }
+  }
+
+  async function removeFromHistory(folder: FolderItem) {
+    const newHistory = folderHistory.filter(p => p !== folder.path);
+    setFolderHistory(newHistory);
+    
+    try {
+      await LocalStorage.setItem("folder-history-v2", JSON.stringify(newHistory));
+      showToast(Toast.Style.Success, "Removed from Recent", folder.name);
+      
+      // Refresh the display
+      searchFolders();
+    } catch (error) {
+      console.warn("Failed to save folder history:", error);
+      showToast(Toast.Style.Failure, "Failed to remove from history", String(error));
     }
   }
 
@@ -283,23 +365,26 @@ export default function SearchFolders() {
         
         return (
           <List.Item
-            key={folder.path}
+            key={`${folder.path}-${folder.isFromHistory ? 'history' : 'search'}`}
             title={folder.name}
             subtitle={folder.path}
             icon={folder.isFromHistory ? Icon.Clock : Icon.Folder}
             accessories={accessories}
             actions={
               <ActionPanel>
-                <Action.Open
+                <Action
                   title="Open Folder"
+                  icon={Icon.Folder}
+                  onAction={() => {
+                    handleFolderSelect(folder);
+                    // Open folder using system default
+                    exec(`open "${folder.path}"`);
+                  }}
+                />
+                <Action.Open
+                  title="Open in Finder"
                   target={folder.path}
                   onOpen={() => handleFolderSelect(folder)}
-                />
-                <Action
-                  title="Add to Recent"
-                  icon={Icon.Plus}
-                  shortcut={{ modifiers: ["cmd"], key: "r" }}
-                  onAction={() => handleFolderSelect(folder)}
                 />
                 <Action
                   title="Navigate Into"
@@ -313,6 +398,20 @@ export default function SearchFolders() {
                     icon={Icon.ArrowLeft}
                     shortcut={{ modifiers: [], key: "arrowLeft" }}
                     onAction={navigateBack}
+                  />
+                )}
+                <Action
+                  title="Add to Recent"
+                  icon={Icon.Plus}
+                  shortcut={{ modifiers: ["ctrl"], key: "r" }}
+                  onAction={() => handleFolderSelect(folder)}
+                />
+                {folder.isFromHistory && (
+                  <Action
+                    title="Remove from Recent"
+                    icon={Icon.Minus}
+                    shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                    onAction={() => removeFromHistory(folder)}
                   />
                 )}
                 <Action.ShowInFinder
