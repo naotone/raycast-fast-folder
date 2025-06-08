@@ -1,0 +1,80 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "fast-folders",
+  "title": "Fast Folder Access",
+  "description": "Quickly access frequently used folders with intelligent search and history",
+  "icon": "folder.png",
+  "author": "naotone",
+  "categories": [
+    "System"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "search-folders",
+      "title": "Search Folders",
+      "description": "Search and access folders with smart history-based suggestions",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "searchPaths",
+      "type": "textfield",
+      "required": false,
+      "title": "Search Directories",
+      "description": "Directories to search for folders, separated by commas (default: home directory)",
+      "placeholder": "/Users/username/Projects, /Users/username/Documents, /Users/username/Desktop"
+    },
+    {
+      "name": "maxHistoryItems",
+      "type": "textfield",
+      "required": false,
+      "title": "Max History Items",
+      "description": "Maximum number of recent folders to remember",
+      "default": "10",
+      "placeholder": "10"
+    },
+    {
+      "name": "searchDepth",
+      "type": "dropdown",
+      "required": false,
+      "title": "Search Depth",
+      "description": "How deep to search in subdirectories",
+      "default": "3",
+      "data": [
+        {
+          "title": "1 level",
+          "value": "1"
+        },
+        {
+          "title": "2 levels",
+          "value": "2"
+        },
+        {
+          "title": "3 levels",
+          "value": "3"
+        },
+        {
+          "title": "4 levels",
+          "value": "4"
+        },
+        {
+          "title": "5 levels",
+          "value": "5"
+        }
+      ]
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.62.0",
+    "@raycast/utils": "^1.10.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
