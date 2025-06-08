@@ -1,6 +1,6 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
-  "name": "fast-folders",
+  "name": "fast-folder",
   "title": "Fast Folder Access",
   "description": "Quickly access frequently used folders with intelligent search and history",
   "icon": "folder.png",
