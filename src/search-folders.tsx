@@ -29,7 +29,11 @@ interface FolderItem {
 
 // Calculate match score for a folder name against search query
 function calculateMatchScore(folderName: string, query: string, pathDepth: number = 0, isFromHistory: boolean = false): { score: number; reason: string } {
-  if (!query) return { score: 50, reason: "no query" };
+  if (!query) {
+    let score = 50;
+    if (isFromHistory) score += 20;
+    return { score, reason: "no query" + (isFromHistory ? " + history" : "") };
+  }
   
   const normalizedName = folderName.toLowerCase();
   const normalizedQuery = query.toLowerCase();
@@ -125,16 +129,35 @@ export default function SearchFolders() {
   const enableFuzzyMatch = preferences.enableFuzzyMatch !== "false";
   const prioritizeRecent = preferences.prioritizeRecent !== "false";
 
-  // Load history from LocalStorage on component mount
+  // Load history from LocalStorage on component mount and clean invalid paths
   useEffect(() => {
-    async function loadHistory() {
+    async function loadAndCleanHistory() {
       try {
         const savedHistory = await LocalStorage.getItem<string>("folder-history-v2");
         if (savedHistory) {
           const parsedHistory = JSON.parse(savedHistory);
           if (Array.isArray(parsedHistory)) {
-            setFolderHistory(parsedHistory);
-            console.log(`Loaded ${parsedHistory.length} history items:`, parsedHistory.map(p => basename(p)));
+            // Clean up invalid paths on load
+            const validPaths: string[] = [];
+            for (const path of parsedHistory) {
+              try {
+                const stats = await stat(path);
+                if (stats.isDirectory()) {
+                  validPaths.push(path);
+                }
+              } catch {
+                console.warn(`Removing invalid path from history: ${path}`);
+              }
+            }
+            
+            setFolderHistory(validPaths);
+            
+            // Save cleaned history if it changed
+            if (validPaths.length !== parsedHistory.length) {
+              await LocalStorage.setItem("folder-history-v2", JSON.stringify(validPaths));
+            }
+            
+            console.log(`Loaded ${validPaths.length} valid history items:`, validPaths.map(p => basename(p)));
           }
         } else {
           console.log("No saved history found");
@@ -143,7 +166,7 @@ export default function SearchFolders() {
         console.warn("Failed to load folder history:", error);
       }
     }
-    loadHistory();
+    loadAndCleanHistory();
   }, []);
 
   // Debounce search text
@@ -157,14 +180,10 @@ export default function SearchFolders() {
 
   useEffect(() => {
     searchFolders();
-  }, [debouncedSearchText, currentDirectory]);
+  }, [debouncedSearchText, currentDirectory, folderHistory]);
 
-  // Refresh search when history changes
-  useEffect(() => {
-    if (folderHistory.length > 0) {
-      searchFolders();
-    }
-  }, [folderHistory]);
+  // Only search when search text or directory changes, not when history changes
+  // History changes should not trigger new searches to avoid infinite loops
 
   // Progressive search function that shows results as they come in
   async function performProgressiveSearch(
@@ -258,12 +277,19 @@ export default function SearchFolders() {
         setSearchProgress("Searching...");
       }
       
-      // Helper function to safely add folders without duplicates
-      const addFoldersToCollection = (newFolders: FolderItem[]) => {
-        const uniqueNewFolders = newFolders.filter(folder => !currentDisplayedPaths.has(folder.path));
-        uniqueNewFolders.forEach(folder => {
-          currentDisplayedPaths.add(folder.path);
-          allFolders.push(folder);
+      // Helper function to add folders to collection
+      // Allow duplicates for history items that are also parent directories
+      const addFoldersToCollection = (newFolders: FolderItem[], allowDuplicatesForHistory = false) => {
+        newFolders.forEach(folder => {
+          const isDuplicate = currentDisplayedPaths.has(folder.path);
+          const shouldAdd = !isDuplicate || (allowDuplicatesForHistory && folder.isFromHistory);
+          
+          if (shouldAdd) {
+            if (!isDuplicate) {
+              currentDisplayedPaths.add(folder.path);
+            }
+            allFolders.push(folder);
+          }
         });
       };
       
@@ -280,9 +306,9 @@ export default function SearchFolders() {
             if (showInCurrentMode) {
               const matchResult = calculateMatchScore(name, query, 0, true);
               
-              // Only show if there's a decent match or no query
+              // Always show history items when no query, or when they match
               if (!query || matchResult.score > 0) {
-                console.log(`History item ${name}: score=${matchResult.score}, reason=${matchResult.reason}`);
+                console.log(`Adding history item ${name}: score=${matchResult.score}, reason=${matchResult.reason}`);
                 
                 const historyItem: FolderItem = {
                   path: historyPath,
@@ -292,22 +318,26 @@ export default function SearchFolders() {
                   matchReason: matchResult.reason
                 };
                 historyItems.push(historyItem);
+              } else {
+                console.log(`Skipping history item ${name}: score=${matchResult.score}, reason=${matchResult.reason}`);
               }
             }
           }
         } catch (error) {
-          // Path doesn't exist or is inaccessible, remove from history
-          console.warn(`Removing inaccessible path from history: ${historyPath}`);
-          const cleanedHistory = folderHistory.filter(p => p !== historyPath);
-          setFolderHistory(cleanedHistory);
-          // Save cleaned history
-          LocalStorage.setItem("folder-history-v2", JSON.stringify(cleanedHistory)).catch(console.warn);
+          // Path doesn't exist or is inaccessible, silently skip it
+          // Don't modify history during search to avoid render loops
+          console.warn(`Skipping inaccessible path: ${historyPath}`);
         }
       }
       
-      // Add history items to collection
+      console.log(`Processing ${historyItems.length} history items for display`);
+      
+      // Add history items to collection (always allow, even if duplicates)
       if (historyItems.length > 0) {
-        addFoldersToCollection(historyItems);
+        console.log(`Adding ${historyItems.length} history items to collection`);
+        addFoldersToCollection(historyItems, true);
+      } else {
+        console.log("No history items to add to collection");
       }
       
       // If we're navigating in a specific directory, show its contents
@@ -319,9 +349,9 @@ export default function SearchFolders() {
         }));
         addFoldersToCollection(newItems);
       } else {
-        // When in main view (not navigating), show registered parent directories first
+        // When in main view (not navigating), show registered parent directories
         if (query.length === 0) {
-          // Show registered parent directories themselves first
+          // Show registered parent directories themselves (always show, even if in history)
           const parentDirectoryItems: FolderItem[] = [];
           for (const searchPath of searchPaths) {
             try {
@@ -332,7 +362,9 @@ export default function SearchFolders() {
                   name: basename(searchPath),
                   isFromHistory: false,
                   sourceDirectory: dirname(searchPath),
-                  isParentDirectory: true
+                  isParentDirectory: true,
+                  score: 50,
+                  matchReason: "parent directory"
                 });
               }
             } catch (error) {
@@ -340,26 +372,17 @@ export default function SearchFolders() {
             }
           }
           
+          // Add parent directories (allow duplicates with history)
           if (parentDirectoryItems.length > 0) {
-            addFoldersToCollection(parentDirectoryItems);
+            parentDirectoryItems.forEach(folder => {
+              allFolders.push(folder);
+            });
           }
           
-          // Then show contents of parent directories (first level only)
-          for (const searchPath of searchPaths) {
-            try {
-              const parentItems = await findFolders(searchPath, "", 1);
-              const itemsWithSource = parentItems.map(folder => ({
-                ...folder,
-                sourceDirectory: searchPath
-              }));
-              addFoldersToCollection(itemsWithSource);
-            } catch (error) {
-              console.error(`Failed to search in ${searchPath}:`, error);
-            }
-          }
+          // Don't show child directories on initial load - only when searching
         } else if (query.length >= 1) {
           // Progressive search - show results as they come in
-          await performProgressiveSearch(searchPaths, query, searchDepth, currentSearchRef, addFoldersToCollection, allFolders, currentDisplayedPaths);
+          await performProgressiveSearch(searchPaths, query, searchDepth, currentSearchRef, (items) => addFoldersToCollection(items), allFolders, currentDisplayedPaths);
         }
       }
       
@@ -370,9 +393,12 @@ export default function SearchFolders() {
         return scoreB - scoreA;
       });
       
+      console.log(`Final folders before display (${allFolders.length} total):`, allFolders.map(f => `${f.name}(${f.score},${f.isFromHistory ? 'hist' : 'reg'})`));
+      
       // Limit results to prevent UI overload
       const limitedFolders = sortedFolders.slice(0, maxResults);
       
+      console.log(`Setting ${limitedFolders.length} folders for display`);
       setFolders(limitedFolders);
       setDisplayedPaths(currentDisplayedPaths);
       setSearchProgress("");
