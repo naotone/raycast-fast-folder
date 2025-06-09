@@ -197,6 +197,11 @@ export default function SearchFolders() {
   ) {
     const updateDisplay = () => {
       const sortedFolders = [...allFolders].sort((a, b) => {
+        // If one is history and the other is not, history comes first
+        if (a.isFromHistory && !b.isFromHistory) return -1;
+        if (!a.isFromHistory && b.isFromHistory) return 1;
+        
+        // Otherwise sort by score
         const scoreA = a.score || 0;
         const scoreB = b.score || 0;
         return scoreB - scoreA;
@@ -387,13 +392,19 @@ export default function SearchFolders() {
       }
       
       // Sort by score (highest first) and update display
+      // Ensure history items always come first when scores are equal
       const sortedFolders = allFolders.sort((a, b) => {
+        // If one is history and the other is not, history comes first
+        if (a.isFromHistory && !b.isFromHistory) return -1;
+        if (!a.isFromHistory && b.isFromHistory) return 1;
+        
+        // Otherwise sort by score
         const scoreA = a.score || 0;
         const scoreB = b.score || 0;
         return scoreB - scoreA;
       });
       
-      console.log(`Final folders before display (${allFolders.length} total):`, allFolders.map(f => `${f.name}(${f.score},${f.isFromHistory ? 'hist' : 'reg'})`));
+      console.log(`Final folders before display (${allFolders.length} total):`, allFolders.map(f => `${f.name}(score:${f.score},hist:${f.isFromHistory},parent:${f.isParentDirectory})`));
       
       // Limit results to prevent UI overload
       const limitedFolders = sortedFolders.slice(0, maxResults);
@@ -605,6 +616,7 @@ export default function SearchFolders() {
       searchBarPlaceholder={currentDirectory ? `Search in ${basename(currentDirectory)}...` : "Search folders..."}
       throttle
       navigationTitle={currentDirectory ? `📁 ${basename(currentDirectory)}` : "Fast Folder Access"}
+      selectedItemId={folders.length > 0 ? `${folders[0].path}-${folders[0].isFromHistory ? 'history' : 'search'}` : undefined}
     >
       {folders.map((folder) => {
         const accessories = [];
@@ -619,9 +631,12 @@ export default function SearchFolders() {
           accessories.push({ text: `${folder.score}` });
         }
         
+        const itemId = `${folder.path}-${folder.isFromHistory ? 'history' : 'search'}`;
+        
         return (
           <List.Item
-            key={`${folder.path}-${folder.isFromHistory ? 'history' : 'search'}`}
+            id={itemId}
+            key={itemId}
             title={folder.name}
             subtitle={folder.path}
             icon={folder.isFromHistory ? Icon.Clock : folder.isParentDirectory ? Icon.House : Icon.Folder}
