@@ -7,8 +7,9 @@ A Raycast extension for quickly accessing frequently used folders with intellige
 🚀 **Smart Search**: Dynamic folder search with real-time scoring and progressive loading
 🧠 **Intelligent History**: Automatically tracks and prioritizes frequently accessed folders
 📊 **Advanced Scoring**: Sophisticated matching algorithm that scores results based on:
+
 - Exact matches (100 points)
-- Prefix matches (90 points) 
+- Prefix matches (90 points)
 - Word boundary matches (80 points)
 - Contains matches (70 points)
 - Fuzzy matches (50-60 points)
@@ -28,20 +29,22 @@ A Raycast extension for quickly accessing frequently used folders with intellige
 ## Usage
 
 ### Search and Navigation
+
 - **Type to search**: Start typing to find folders dynamically
 - **Progressive results**: Results appear as they're found
 - **Smart scoring**: Results ranked by relevance and recent usage
 
 ### Keyboard Shortcuts
-- **⏎ Enter**: Open folder in default app
-- **⌘O**: Open folder in Finder  
-- **⌘→**: Navigate into folder (browse mode)
-- **⌘←**: Go back (when in browse mode)
+
+- **⌘O**: Open folder in Finder
+- **⏎ Enter** or **⌘→**: Navigate forward into folder
+- **⌘←**: Navigate Back
 - **⌃R**: Add to recent folders
 - **⌃X**: Remove from recent (recent items only)
 - **⌘C**: Copy folder path to clipboard
 
 ### Folder Types
+
 - **🕐 Recent**: Previously accessed folders (shown first)
 - **🏠 Parent**: Configured search directories
 - **📂 Search**: Found folders matching your query
@@ -49,6 +52,7 @@ A Raycast extension for quickly accessing frequently used folders with intellige
 ## Configuration
 
 ### Preferences
+
 - **Search Directories**: Comma-separated list of directories to search
 - **Max History Items**: Number of recent folders to remember (default: 10)
 - **Search Depth**: How deep to search in subdirectories (1-5 levels)
@@ -62,13 +66,15 @@ A Raycast extension for quickly accessing frequently used folders with intellige
 The extension uses a sophisticated scoring system:
 
 1. **Base Scoring**:
+
    - Exact match: 100 points
-   - Starts with query: 90 points  
+   - Starts with query: 90 points
    - Word boundary match: 80 points
    - Contains query: 70 points
    - Fuzzy match: 50-60 points
 
 2. **Bonuses & Penalties**:
+
    - Recent folder bonus: +20 points
    - Depth penalty: -5 points per directory level
    - Minimum score: 1 point
@@ -100,18 +106,21 @@ npm run fix-lint
 ## Technical Details
 
 ### Architecture
+
 - **React Hooks**: Uses modern React patterns with hooks
 - **Local Storage**: Persistent history management
 - **Async Search**: Non-blocking progressive search
 - **Smart Caching**: Efficient result caching and deduplication
 
 ### Performance Features
+
 - **Debounced Search**: Prevents excessive searches while typing
 - **Batch Processing**: Results processed in batches for smooth UI
-- **Path Validation**: Automatic cleanup of invalid history entries  
+- **Path Validation**: Automatic cleanup of invalid history entries
 - **Search Cancellation**: Previous searches cancelled when new ones start
 
 ### File Structure
+
 ```
 src/
 ├── search-folders.tsx    # Main component with search logic
