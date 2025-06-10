@@ -659,6 +659,15 @@ export default function SearchFolders() {
                     exec(`open "${folder.path}"`);
                   }}
                 />
+                <Action
+                  title="Open Without History"
+                  icon={Icon.FolderOpen}
+                  shortcut={{ modifiers: ["cmd", "opt"], key: "o" }}
+                  onAction={() => {
+                    // Open folder without adding to history
+                    exec(`open "${folder.path}"`);
+                  }}
+                />
                 <Action.Open
                   title="Open in Finder"
                   target={folder.path}
