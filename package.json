@@ -3,7 +3,7 @@
   "name": "fast-folder",
   "title": "Fast Folder Access",
   "description": "Quickly access frequently used folders with intelligent search and history",
-  "icon": "folder.png",
+  "icon": "icon.png",
   "author": "naotone",
   "categories": [
     "System"
