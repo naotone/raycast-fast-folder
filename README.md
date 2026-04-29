@@ -36,9 +36,11 @@ A Raycast extension for quickly accessing frequently used folders with intellige
 
 ### Keyboard Shortcuts
 
-- **⌘O**: Open folder in Finder
 - **⏎ Enter** or **⌘→**: Navigate forward into folder
-- **⌘←**: Navigate Back
+- **⌘↵** or **⌘O**: Open folder in Finder
+- **⌘⌥O**: Open folder in Finder without adding it to history
+- **⌘⇧O**: Reveal folder in Finder
+- **⌫** or **⌘←**: Navigate Back
 - **⌃R**: Add to recent folders
 - **⌃X**: Remove from recent (recent items only)
 - **⌘C**: Copy folder path to clipboard

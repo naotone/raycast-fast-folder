@@ -30,10 +30,12 @@ type ExtensionPreferences = {
 • Fuzzy matching: 'proj' finds 'project'
 
 ⚡ ACTIONS:
-• ⏎ Enter: Open folder in default app
-• ⌘O: Open folder in Finder
+• ⏎ Enter: Navigate into folder (browse mode)
+• ⌘↵ or ⌘O: Open folder in Finder
+• ⌘⌥O: Open folder in Finder without history
+• ⌘⇧O: Reveal folder in Finder
 • ⌘→: Navigate into folder (browse mode)
-• ⌘←: Go back (when in browse mode)
+• ⌫ or ⌘←: Go back (when in browse mode)
 • ⌃R: Add to recent folders
 • ⌃X: Remove from recent (recent items only)
 • ⌘C: Copy folder path to clipboard
